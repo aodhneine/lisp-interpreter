@@ -2,6 +2,10 @@ module Token = struct
   type token = OpenBracket
              | CloseBracket
              | Point
+             (* this is only used in a combination with other characters, for example
+              * #t, #f, #v(1, 2, 3) *)
+             | Hash
+             | Quote
              | String of string
              | Identifier of string
              | Unknown of string
@@ -11,9 +15,17 @@ module Token = struct
     | OpenBracket -> print_string "(openbracket)"
     | CloseBracket -> print_string "(closebracket)"
     | Point -> print_string "(point)"
+    | Hash -> print_string "(hash)"
+    | Quote -> print_string "(quote)"
     | String s -> print_string ("(string " ^ s ^ ")")
     | Identifier s -> print_string ("(identifier " ^ s ^ ")")
     | Unknown s -> print_string ("(unknown " ^ s ^ ")")
+
+  let print_token_list (tokens : token list) : unit =
+    print_string "[ ";
+    List.iter (fun x -> print_token x; print_string "; ") tokens;
+    print_endline "]"
+
 end
 
 module Lexer = struct
@@ -22,33 +34,37 @@ module Lexer = struct
     let rec lex (tokens : Token.token list) (i : int) : Token.token list =
       if i == l then tokens
       else
-      let c = String.get input i in
-      print_endline ("\x1b[2m(lex)\x1b[0m c = " ^ String.make 1 c);
-      match c with
-      | ' ' -> lex tokens (i + 1)
-      | '(' -> lex (OpenBracket :: tokens) (i + 1)
-      | ')' -> lex (CloseBracket :: tokens) (i + 1)
-      | '.' -> lex (Point :: tokens) (i + 1)
-      | '"' -> let rec loop (j : int) : string =
-                 let c' = String.get input j in
-                 match c' with
-                 | '"' -> String.sub input i (j - i + 1)
-                 | _ -> loop (j + 1)
-               in
-               let s = loop (i + 1) in
-               print_endline ("\x1b[2m(lex)\x1b[0m s = " ^ s);
-               lex (String s :: tokens) (i + String.length s)
-      | 'a'..'z' -> let rec loop (j : int) : string =
-                      let c' = String.get input j in
-                      match c' with
-                      (* terminals *)
-                      | '(' | ')' | ' ' -> String.sub input i (j - i)
-                      | _ -> loop (j + 1)
-                    in
-                    let s = loop i in
-                    print_endline ("\x1b[2m(lex)\x1b[0m s = " ^ s);
-                    lex (Identifier s :: tokens) (i + String.length s)
-      | c -> lex (Unknown (String.make 1 c) :: tokens) (i + 1)
+        (* we can safely use String.get *)
+        let c = String.get input i in
+        (* print_endline ("\x1b[2m(lex)\x1b[0m c = " ^ String.make 1 c); *)
+        match c with
+        | ' ' -> lex tokens (i + 1)
+        | '(' -> lex (OpenBracket :: tokens) (i + 1)
+        | ')' -> lex (CloseBracket :: tokens) (i + 1)
+        | '.' -> lex (Point :: tokens) (i + 1)
+        | '#' -> lex (Hash :: tokens) (i + 1)
+        | '"' -> let rec loop (j : int) : string =
+                   let c' = String.get input j in
+                   match c' with
+                   | '"' -> String.sub input i (j - i + 1)
+                   | _ -> loop (j + 1)
+                 in
+                 let s = loop (i + 1) in
+                 (* print_endline ("\x1b[2m(lex)\x1b[0m s = " ^ s); *)
+                 lex (String s :: tokens) (i + String.length s)
+        | 'a'..'z' -> let rec loop (j : int) : string =
+                        if j == l then String.sub input i (j - i)
+                        else
+                          let c' = String.get input j in
+                          match c' with
+                          (* terminals *)
+                          | '(' | ')' | ' ' -> String.sub input i (j - i)
+                          | _ -> loop (j + 1)
+                      in
+                      let s = loop i in
+                      print_endline ("\x1b[2m(lex)\x1b[0m s = " ^ s);
+                      lex (Identifier s :: tokens) (i + String.length s)
+        | c -> lex (Unknown (String.make 1 c) :: tokens) (i + 1)
     in
     List.rev (lex [] 0)
 end
@@ -58,7 +74,7 @@ module Ast = struct
             | Cons of cons
   and atom = String of string
            | Literal of string
-           | Nil (* () or nil *)
+           | Nil (* () *)
            | True (* #t *)
            | False (* #f *)
   and cons = sexp * sexp
