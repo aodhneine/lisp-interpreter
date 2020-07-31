@@ -108,6 +108,45 @@ module Ast = struct
 end
 
 module Parser = struct
+  (* grammar:
+   * sexp -> atom | cons
+   * atom -> literal | string | nil | true | false
+   * nil -> open_bracket close_bracket => Ast.Nil
+   * true -> #t => Ast.True
+   * false -> #f => Ast.False
+   * cons -> open_bracket sexp point sexp close_bracket => Ast.Cons a b
+   *  | open_bracket cons_list close_bracket
+   * cons_list -> sexp => Ast.Cons a Ast.Nil
+   *  | sexp cons_list => Ast.Cons a b
+   *)
+
+  let rec parser (input : Token.token list) : (Ast.sexp, string) result =
+    print_string "parsing "; Token.print_token_list input;
+    match List.hd input with
+    | String s -> Ok (Ast.Atom (Ast.String s))
+    | Identifier s -> Ok (Ast.Atom (Ast.Literal s))
+    | Hash ->
+       let a = List.tl input in
+       (match List.hd a with
+        | Identifier s ->
+           (match String.get s 0 with
+            | 't' -> Ok (Ast.Atom Ast.True)
+            | 'f' -> Ok (Ast.Atom Ast.False)
+            | _ -> Error "Unrecognised character after #."
+           )
+        | _ -> Error "Expected identifier after #."
+       )
+    | OpenBracket -> Error "Not implemented yet."
+    | _ -> Error "Invalid token in the wrong place."
+end
+
+module Evaluator = struct
+(* language:
+ * define -> (define <id> <sexp>) | (define (<sexp>) <sexp>)
+ * lambda -> (lambda <sexp> <sexp>)
+ * quote -> (lambda <sexp>)
+ *)
+
 end
 
 let main =
@@ -117,14 +156,24 @@ let main =
   print_endline "";
   ()
 
+module Result = struct
+  include Result
+
+  let penetrate (g : ('b -> 'd)) (f : ('a -> 'c)) (r: ('a, 'b) result) : ('c, 'd) result =
+    Result.map_error g (Result.map f r)
+
+  let drop (r: ('a, 'b) result) : unit =
+    ()
+end
+
 let _ =
   let repl () : unit =
     print_string "> ";
     let input = read_line() in
     let tokens = Lexer.lexer input in
-    print_string "[ ";
-    List.iter (fun x -> Token.print_token x; print_string "; ") tokens;
-    print_endline "]";
+    (* Token.print_token_list tokens; *)
+    Result.drop (Result.penetrate (fun x -> print_string ("!> " ^ x)) (fun x -> print_string "=> "; Ast._print_ast x) (Parser.parser tokens));
+    print_endline ""
   in
   while true do
     repl ()
