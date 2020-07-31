@@ -5,15 +5,15 @@ module Token = struct
              | String of string
              | Identifier of string
              | Unknown of string
-  
+
   let rec print_token (token : token) : unit =
     match token with
-    | OpenBracket -> print_string "OpenBracket"
-    | CloseBracket -> print_string "CloseBracket"
-    | Point -> print_string "Point"
-    | String s -> print_string ("String(" ^ s ^ ")")
-    | Identifier s -> print_string ("Identifier(" ^ s ^ ")")
-    | Unknown s -> print_string ("Unknown(" ^ s ^ ")")
+    | OpenBracket -> print_string "(openbracket)"
+    | CloseBracket -> print_string "(closebracket)"
+    | Point -> print_string "(point)"
+    | String s -> print_string ("(string " ^ s ^ ")")
+    | Identifier s -> print_string ("(identifier " ^ s ^ ")")
+    | Unknown s -> print_string ("(unknown " ^ s ^ ")")
 end
 
 module Lexer = struct
@@ -50,27 +50,65 @@ module Lexer = struct
                     lex (Identifier s :: tokens) (i + String.length s)
       | c -> lex (Unknown (String.make 1 c) :: tokens) (i + 1)
     in
-    List.rev (lex [] 0)  
+    List.rev (lex [] 0)
 end
 
 module Ast = struct
   type sexp = Atom of atom
             | Cons of cons
-  and atom = string
+  and atom = String of string
+           | Literal of string
+           | Nil (* () or nil *)
+           | True (* #t *)
+           | False (* #f *)
   and cons = sexp * sexp
+
+  let print_atom (atom : atom) : unit =
+    match atom with
+    | String s -> print_string ("\"" ^ s ^ "\"")
+    | Literal s -> print_string s
+    | Nil -> print_string "nil"
+    | True -> print_string "#t"
+    | False -> print_string "#f"
+
+  let rec _print_ast (ast : sexp) : unit =
+    match ast with
+    | Atom a -> print_atom a
+    | Cons (a, b) -> _print_cons (a, b)
+  and _print_cons ((a, b) : cons) : unit =
+    print_string "("; _print_ast a; print_string " "; _print_ast b; print_string ")"
+
+  let rec print_ast (ast : sexp) : unit =
+    match ast with
+    | Atom atom -> print_atom atom
+    | Cons (a, b) -> print_cons (a, b)
+  and print_cons ((a, b) : cons) : unit =
+    match b with
+    | Atom b' -> (match b' with
+                  | Nil -> print_string "("; print_ast a; print_string ")"
+                  | _ -> print_string "("; print_ast a; print_string " . "; print_atom b'; print_string ")"
+                 )
+    | _ -> print_string "("; print_ast a; print_string " "; print_ast b; print_string ")"
 end
 
 module Parser = struct
 end
 
 let main =
+  Ast._print_ast (Ast.Cons ((Ast.Atom (Ast.Literal "print")), (Ast.Atom (Ast.String "nyan~"))));
+  print_endline "";
+  Ast._print_ast (Ast.Cons ((Ast.Atom (Ast.True)), (Ast.Atom (Ast.Nil))));
+  print_endline "";
+  ()
+
+let _ =
   let repl () : unit =
     print_string "> ";
     let input = read_line() in
     let tokens = Lexer.lexer input in
     print_string "[ ";
     List.iter (fun x -> Token.print_token x; print_string "; ") tokens;
-    print_endline "]"
+    print_endline "]";
   in
   while true do
     repl ()
