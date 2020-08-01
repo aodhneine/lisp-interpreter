@@ -56,12 +56,12 @@ module Lexer = struct
         | '"' -> let rec loop (j : int) : string =
                    let c' = String.get input j in
                    match c' with
-                   | '"' -> String.sub input i (j - i + 1)
+                   | '"' -> String.sub input (i + 1) (j - i - 1)
                    | _ -> loop (j + 1)
                  in
                  let s = loop (i + 1) in
                  (* print_endline ("\x1b[2m(lex)\x1b[0m s = " ^ s); *)
-                 lex (String s :: tokens) (i + String.length s)
+                 lex (String s :: tokens) (i + String.length s + 2)
         | 'a'..'z' -> let rec loop (j : int) : string =
                         if j == l then String.sub input i (j - i)
                         else
@@ -89,9 +89,12 @@ module Ast = struct
            | False (* #f *)
   and cons = sexp * sexp
 
+  let car ((a, b) : cons) : sexp = a
+  let cdr ((a, b) : cons) : sexp = b
+
   let print_atom (atom : atom) : unit =
     match atom with
-    | String s -> print_string ("" ^ s)
+    | String s -> print_string ("\"" ^ s ^ "\"")
     | Literal s -> print_string s
     | Nil -> print_string "nil"
     | True -> print_string "#t"
@@ -104,17 +107,19 @@ module Ast = struct
   and _print_cons ((a, b) : cons) : unit =
     print_string "("; _print_ast a; print_string " . "; _print_ast b; print_string ")"
 
+  (* TODO: doesn't work properly for (<sexp> <sexp>...) *)
   let rec print_ast (ast : sexp) : unit =
     match ast with
     | Atom atom -> print_atom atom
     | Cons (a, b) -> print_cons (a, b)
   and print_cons ((a, b) : cons) : unit =
     match b with
-    | Atom b' -> (match b' with
-                  | Nil -> print_string "("; print_ast a; print_string ")"
-                  | _ -> print_string "("; print_ast a; print_string " . "; print_atom b'; print_string ")"
-                 )
-    | _ -> print_string "("; print_ast a; print_string " "; print_ast b; print_string ")"
+    | Atom atom ->
+       (match atom with
+        | Nil -> print_string "("; print_ast a; print_string ")"
+        | _ -> print_string "("; print_ast a; print_string " . "; print_atom atom; print_string ")"
+       )
+    | Cons (b', c) -> print_string "("; print_ast a; print_string " "; print_ast b; print_string ")"
 end
 
 module Parser = struct
@@ -178,27 +183,121 @@ module Parser = struct
        )
 end
 
+module Hash = struct
+  (* Taken from http://www.cse.yorku.ca/~oz/hash.html. *)
+  let djb2 (s : string) : int =
+    let initial = 5381 in
+    let len = String.length s in
+    let rec loop (hash : int) (i : int) : int =
+      if i == len then hash
+      else
+        (* NOTE: Modulo is required to keep hash value in 32-bit integer range,
+         * otherwise it'll be differ from C version. *)
+        loop (((hash * 32) + hash + Char.code (String.get s i)) mod 0xFFFFFFFF) (i + 1)
+    in
+    loop initial 0
+end
+
 module Evaluator = struct
-(* language:
- * define -> (define <id> <sexp>) | (define (<sexp>) <sexp>)
- * lambda -> (lambda <sexp> <sexp>)
- * quote -> (quote <sexp>)
- *)
+  (* language:
+   * define -> (define <sexp> <sexp>)
+   * lambda -> (lambda <cons> <sexp>)
+   * quote -> (quote <sexp>)
+   * list -> (list <sexp>...)
+   *)
+
+  type sobject = Simpleton of Ast.sexp
+               | Procedure of (string list) * Ast.sexp
+
+  type scope = (int, Ast.sexp) Hashtbl.t
+
+  let rec evaluate (input : Ast.sexp) (scope : scope) : ((Ast.sexp * scope), string) result =
+    match input with
+    | Ast.Atom atom ->
+       (match atom with
+        | Ast.Literal s ->
+           (try Ok (Hashtbl.find scope (Hash.djb2 s), scope) with
+            | Not_found -> Error "Binding not found in the scope."
+            | _ -> Error "wot?"
+           )
+        | _ -> Ok (input, scope)
+       )
+    | Ast.Cons (a, b) ->
+       (match a with
+        | Ast.Atom atom ->
+           (match atom with
+            | Ast.Literal s ->
+               (match s with
+                | "define" ->
+                   (match b with
+                    | Ast.Atom _ -> Error "Invalid language construction."
+                    | Ast.Cons (b', c) ->
+                       (match b' with
+                        | Ast.Atom atom ->
+                           (match atom with
+                            | Ast.Literal s ->
+                               (match c with
+                                | Ast.Atom _ -> Error "Invalid language construction."
+                                (* Second argument is just nil, which we can ignore *)
+                                | Ast.Cons (c', _) ->
+                                   (* Now we have to evaluate argument in the current scope, effectively
+                                    * expanding it into a proper form. *)
+                                   (match (evaluate c' scope) with
+                                    | Error e -> Error e
+                                    | Ok (c'', scp) ->
+                                       Hashtbl.add scope (Hash.djb2 s) c'';
+                                       (* We return name of the bound object. *)
+                                       Ok (b', scp)
+                                   )
+                               )
+                            | _ -> Error "Invalid identifier."
+                           )
+                        | Ast.Cons _ -> Error "Procedure definition - Work Heavily In Progress."
+                       )
+                   )
+                | "lambda" ->
+                   (match b with
+                    | Ast.Atom _ -> Error "Invalid language construction."
+                    | Ast.Cons (b', c) ->
+                       (match b' with
+                        | Ast.Atom _ -> Error "Invalid language construction."
+                        | Ast.Cons b'' ->
+                           (* b'' is a list of arguments, c is a sexp that lambda evaluates to *)
+                           Error "WIP"
+                       )
+                   )
+                | "quote" -> Error "Quote expressons are not supported yet."
+                | "list" -> Error "List expressions are not supported yet."
+                (* TODO: Currently behaves exactly the same as just calling the identifier directly.
+                 * This should instead look up value in the scope and try to call it as a procedure. *)
+                | _ -> (try Ok (Hashtbl.find scope (Hash.djb2 s), scope) with
+                        | Not_found -> Error "Binding not found in the scope."
+                        | _ -> Error "wot?"
+                       )
+               )
+            | _ -> Error "Not an identifier."
+           )
+        | _ -> Error "Not an identifier."
+       )
 end
 
 let main =
-  let repl () : unit =
+  let repl (scope : Evaluator.scope) : unit =
     print_string "> ";
-    let input = read_line() in
+    let input = read_line () in
     let tokens = Lexer.lexer input in
-    (* Token.print_token_list tokens; *)
-    Result.drop
-      (Result.penetrate
-         (fun x -> print_string ("!> " ^ x))
-         (fun (x, y) -> print_string "=> "; Ast._print_ast x; print_endline ""; print_string "*> "; Token.print_token_list y)
-         (Parser.parser tokens));
-    print_endline ""
+    (match Parser.parser tokens with
+     | Error e -> print_string ("!> " ^ e)
+     | Ok (ast, tkns) ->
+        print_string "#> "; Ast._print_ast ast; print_endline ""; print_string "*> "; Token.print_token_list tkns; print_endline "";
+        (match Evaluator.evaluate ast scope with
+         | Error e -> print_string ("!> " ^ e)
+         | Ok (res, scp) -> print_string "=> "; Ast._print_ast res
+        );
+    );
+    print_endline "";
   in
+  let global_scope = Hashtbl.create 64 in
   while true do
-    repl ()
+    repl global_scope
   done
