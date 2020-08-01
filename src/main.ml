@@ -1,3 +1,13 @@
+module Result = struct
+  include Result
+
+  let penetrate (g : ('b -> 'd)) (f : ('a -> 'c)) (r: ('a, 'b) result) : ('c, 'd) result =
+    Result.map_error g (Result.map f r)
+
+  let drop (r: ('a, 'b) result) : unit =
+    ()
+end
+
 module Token = struct
   type token = OpenBracket
              | CloseBracket
@@ -41,6 +51,7 @@ module Lexer = struct
         | '(' -> lex (OpenBracket :: tokens) (i + 1)
         | ')' -> lex (CloseBracket :: tokens) (i + 1)
         | '.' -> lex (Point :: tokens) (i + 1)
+        | '\'' -> lex (Quote :: tokens) (i + 1)
         | '#' -> lex (Hash (String.get input (i + 1)) :: tokens) (i + 2)
         | '"' -> let rec loop (j : int) : string =
                    let c' = String.get input j in
@@ -57,7 +68,7 @@ module Lexer = struct
                           let c' = String.get input j in
                           match c' with
                           (* terminals *)
-                          | '(' | ')' | ' ' -> String.sub input i (j - i)
+                          | '(' | ')' | ' ' | '\'' -> String.sub input i (j - i)
                           | _ -> loop (j + 1)
                       in
                       let s = loop i in
@@ -130,35 +141,41 @@ module Parser = struct
         | 'f' -> Ok ((Ast.Atom Ast.False), List.tl input)
         | _ -> Error "Unrecognised character after #."
        )
+    | Quote ->
+       (match parser (List.tl input) with
+        | Error e -> Error e
+        | Ok (a', b) -> Ok ((Ast.Cons (Ast.Atom (Ast.Literal "quote"), a')), b)
+       )
     | OpenBracket ->
        let a = List.tl input in
        (match List.hd a with
         | CloseBracket -> Ok ((Ast.Atom Ast.Nil), List.tl a)
-        | _ ->
-           (match parser a with
-            | Error e -> Error e
-            | Ok (a', b) ->
-               (* Now we have first element - a', and rest of the tokens - b *)
-               (match List.hd b with
-                | CloseBracket -> Ok ((Ast.Cons (a', Ast.Atom Ast.Nil)), List.tl b)
-                | Point ->
-                   let c = List.tl b in
-                   (match parser c with
-                    | Error e -> Error e
-                    | Ok (c', d) ->
-                       (* Now we have second element - c', and rest of the tokens - d *)
-                       (match List.hd d with
-                        | CloseBracket -> Ok ((Ast.Cons (a', c')), List.tl d)
-                        | _ -> Error "Invalid token."
-                       )
-                   )
-                | _ ->
-                   Error "Not implemented yet."
-               )
-           )
+        | _ -> parse_cons_list a
        )
     | CloseBracket -> Error "Unexpected closing bracket."
     | _ -> Error "Invalid token in the wrong place."
+  and parse_cons_list (input : Token.token list) : ((Ast.sexp * Token.token list), string) result =
+    match parser input with
+    | Error e -> Error e
+    | Ok (a, b) ->
+       (match List.hd b with
+        | CloseBracket -> Ok ((Ast.Cons (a, Ast.Atom Ast.Nil)), List.tl b)
+        | Point ->
+           let c = List.tl b in
+           (match parser c with
+            | Error e -> Error e
+            | Ok (c', d) ->
+               (match List.hd d with
+                | CloseBracket -> Ok ((Ast.Cons (a, c')), List.tl d)
+                | _ -> Error "Invalid token."
+               )
+           )
+        | _ ->
+           (match parse_cons_list b with
+            | Error e -> Error e
+            | Ok (b', c) -> Ok ((Ast.Cons (a, b')), c)
+           )
+       )
 end
 
 module Evaluator = struct
@@ -167,16 +184,6 @@ module Evaluator = struct
  * lambda -> (lambda <sexp> <sexp>)
  * quote -> (lambda <sexp>)
  *)
-end
-
-module Result = struct
-  include Result
-
-  let penetrate (g : ('b -> 'd)) (f : ('a -> 'c)) (r: ('a, 'b) result) : ('c, 'd) result =
-    Result.map_error g (Result.map f r)
-
-  let drop (r: ('a, 'b) result) : unit =
-    ()
 end
 
 let main =
