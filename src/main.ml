@@ -124,9 +124,9 @@ module Parser = struct
    * nil -> open_bracket close_bracket => Ast.Nil
    * true -> #t => Ast.True
    * false -> #f => Ast.False
-   * cons -> open_bracket sexp point sexp close_bracket => Ast.Cons a b
-   *  | open_bracket cons_list close_bracket
+   * cons -> open_bracket cons_list close_bracket
    * cons_list -> sexp => Ast.Cons a Ast.Nil
+   *  | sexp point sexp => Ast.Cons a b
    *  | sexp cons_list => Ast.Cons a b
    *)
 
@@ -182,7 +182,7 @@ module Evaluator = struct
 (* language:
  * define -> (define <id> <sexp>) | (define (<sexp>) <sexp>)
  * lambda -> (lambda <sexp> <sexp>)
- * quote -> (lambda <sexp>)
+ * quote -> (quote <sexp>)
  *)
 end
 
