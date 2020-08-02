@@ -136,7 +136,7 @@ module Parser = struct
    *)
 
   let rec parser (input : Token.token list) : ((Ast.sexp * Token.token list), string) result =
-    print_string "parsing "; Token.print_token_list input; print_endline "";
+    (* print_string "parsing "; Token.print_token_list input; print_endline ""; *)
     match List.hd input with
     | String s -> Ok ((Ast.Atom (Ast.String s)), List.tl input)
     | Identifier s -> Ok ((Ast.Atom (Ast.Literal s)), List.tl input)
@@ -199,105 +199,23 @@ module Hash = struct
 end
 
 module Evaluator = struct
-  (* language:
-   * define -> (define <sexp> <sexp>)
-   * lambda -> (lambda <cons> <sexp>)
-   * quote -> (quote <sexp>)
-   * list -> (list <sexp>...)
-   *)
-
-  type sobject = Simpleton of Ast.sexp
-               | Procedure of (string list) * Ast.sexp
-
-  type scope = (int, Ast.sexp) Hashtbl.t
-
-  let rec evaluate (input : Ast.sexp) (scope : scope) : ((Ast.sexp * scope), string) result =
-    match input with
-    | Ast.Atom atom ->
-       (match atom with
-        | Ast.Literal s ->
-           (try Ok (Hashtbl.find scope (Hash.djb2 s), scope) with
-            | Not_found -> Error "Binding not found in the scope."
-            | _ -> Error "wot?"
-           )
-        | _ -> Ok (input, scope)
-       )
-    | Ast.Cons (a, b) ->
-       (match a with
-        | Ast.Atom atom ->
-           (match atom with
-            | Ast.Literal s ->
-               (match s with
-                | "define" ->
-                   (match b with
-                    | Ast.Atom _ -> Error "Invalid language construction."
-                    | Ast.Cons (b', c) ->
-                       (match b' with
-                        | Ast.Atom atom ->
-                           (match atom with
-                            | Ast.Literal s ->
-                               (match c with
-                                | Ast.Atom _ -> Error "Invalid language construction."
-                                (* Second argument is just nil, which we can ignore *)
-                                | Ast.Cons (c', _) ->
-                                   (* Now we have to evaluate argument in the current scope, effectively
-                                    * expanding it into a proper form. *)
-                                   (match (evaluate c' scope) with
-                                    | Error e -> Error e
-                                    | Ok (c'', scp) ->
-                                       Hashtbl.add scope (Hash.djb2 s) c'';
-                                       (* We return name of the bound object. *)
-                                       Ok (b', scp)
-                                   )
-                               )
-                            | _ -> Error "Invalid identifier."
-                           )
-                        | Ast.Cons _ -> Error "Procedure definition - Work Heavily In Progress."
-                       )
-                   )
-                | "lambda" ->
-                   (match b with
-                    | Ast.Atom _ -> Error "Invalid language construction."
-                    | Ast.Cons (b', c) ->
-                       (match b' with
-                        | Ast.Atom _ -> Error "Invalid language construction."
-                        | Ast.Cons b'' ->
-                           (* b'' is a list of arguments, c is a sexp that lambda evaluates to *)
-                           Error "WIP"
-                       )
-                   )
-                | "quote" -> Error "Quote expressons are not supported yet."
-                | "list" -> Error "List expressions are not supported yet."
-                (* TODO: Currently behaves exactly the same as just calling the identifier directly.
-                 * This should instead look up value in the scope and try to call it as a procedure. *)
-                | _ -> (try Ok (Hashtbl.find scope (Hash.djb2 s), scope) with
-                        | Not_found -> Error "Binding not found in the scope."
-                        | _ -> Error "wot?"
-                       )
-               )
-            | _ -> Error "Not an identifier."
-           )
-        | _ -> Error "Not an identifier."
-       )
 end
 
 let main =
-  let repl (scope : Evaluator.scope) : unit =
+  let repl () : unit =
     print_string "> ";
-    let input = read_line () in
-    let tokens = Lexer.lexer input in
-    (match Parser.parser tokens with
-     | Error e -> print_string ("!> " ^ e)
-     | Ok (ast, tkns) ->
-        print_string "#> "; Ast._print_ast ast; print_endline ""; print_string "*> "; Token.print_token_list tkns; print_endline "";
-        (match Evaluator.evaluate ast scope with
-         | Error e -> print_string ("!> " ^ e)
-         | Ok (res, scp) -> print_string "=> "; Ast._print_ast res
-        );
-    );
-    print_endline "";
+    try
+      let input = read_line () in
+      let tokens = Lexer.lexer input in
+      (match Parser.parser tokens with
+       | Error e -> print_string ("!> " ^ e)
+       | Ok (ast, tkns) ->
+          print_string "#> "; Ast._print_ast ast; print_endline ""; print_string "*> "; Token.print_token_list tkns;
+      );
+      print_endline "";
+    with
+    | End_of_file -> exit 0
   in
-  let global_scope = Hashtbl.create 64 in
   while true do
-    repl global_scope
+    repl ()
   done
