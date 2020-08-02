@@ -89,6 +89,16 @@ module Ast = struct
            | False (* #f *)
   and cons = sexp * sexp
 
+  let car (s : sexp) : (sexp, string) result =
+    match s with
+    | Atom _ -> Error "Not a cons cell."
+    | Cons (a, _) -> Ok a
+
+  let cdr (s : sexp) : (sexp, string) result =
+    match s with
+    | Atom _ -> Error "Not a cons cell."
+    | Cons (_, b) -> Ok b
+
   let print_atom (atom : atom) : unit =
     match atom with
     | String s -> print_string ("\"" ^ s ^ "\"")
@@ -220,7 +230,12 @@ module Eval = struct
   type sexp_object =
     | Simpleton of Ast.sexp
     | Procedure of int option * Ast.sexp
-  
+
+  let print_sexp_object (s : sexp_object) : unit =
+    match s with
+    | Simpleton s -> Ast._print_ast s
+    | _ -> print_string "#<procedure #f>"
+
   type _scope = (int, sexp_object) hashtbl
   (* scope of current scope and (optional) outer scope *)
   and scope = _scope * _scope option
@@ -239,8 +254,7 @@ module Eval = struct
        match outer with
        | Some s -> try_once s
        | None -> Error "Binding not found in the scope."
-      
-  
+
   (* (define id (lambda (x) x)) should return id
    * id should return #<procedure id>
    * (lambda (x) x) should return #<procedure nil> *)
@@ -254,7 +268,18 @@ module Eval = struct
        )
     | Ast.Cons (a, a') ->
        (match a with
-        | Ast.Cons _ -> eval_in_scope a scope
+        | Ast.Cons _ ->
+           (match eval_in_scope a scope with
+            | Error e -> Error e
+            | Ok s ->
+               (match s with
+                | Simpleton _ -> Error "Invalid language construction, something went wrong."
+                | Procedure (arg, body) ->
+                   match arg with
+                   | None -> eval_in_scope body scope
+                   | Some arg -> Failure.not_implemented ()
+               )
+           )
         | Ast.Atom b ->
            (match b with
             | Ast.Literal c ->
@@ -267,10 +292,14 @@ module Eval = struct
                        (match d with
                         | Ast.Atom e ->
                            (match e with
-                            | Ast.Nil -> Failure.work_in_progress ()
+                            | Ast.Nil ->
+                               (match Ast.car d' with
+                                | Error e -> Error e
+                                | Ok d'' -> Ok (Procedure (None, d''))
+                               )
                             | _ -> Error "Invalid expression, expected cons or nil."
                            )
-                        | Ast.Cons _ -> Failure.not_implemented () 
+                        | Ast.Cons _ -> Failure.not_implemented ()
                        )
                    )
                 | _ ->
@@ -280,6 +309,7 @@ module Eval = struct
                        (match c' with
                         | Simpleton _ -> Error "Non-procedure application."
                         | Procedure (args, body) ->
+                           Ast._print_ast body;
                            eval_in_scope body scope
                        )
                    )
@@ -287,11 +317,6 @@ module Eval = struct
             | _ -> Error "Invalid expression."
            )
        )
-
-  let print_sexp_object (s : sexp_object) : unit =
-    match s with
-    | Simpleton s -> Ast._print_ast s
-    | _ -> print_string "not implemented."
 end
 
 let main =
