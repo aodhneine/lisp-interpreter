@@ -1,13 +1,3 @@
-module Result = struct
-  include Result
-
-  let penetrate (g : ('b -> 'd)) (f : ('a -> 'c)) (r: ('a, 'b) result) : ('c, 'd) result =
-    Result.map_error g (Result.map f r)
-
-  let drop (r: ('a, 'b) result) : unit =
-    ()
-end
-
 module Token = struct
   type token = OpenBracket
              | CloseBracket
@@ -190,29 +180,6 @@ module Parser = struct
        )
 end
 
-module Hash = struct
-  (* Adapted from http://www.cse.yorku.ca/~oz/hash.html. *)
-  let djb2 (s : string) : int =
-    let initial = 5381 in
-    let len = String.length s in
-    let rec loop (hash : int) (i : int) : int =
-      if i == len then hash
-      else
-        (* NOTE: Modulo is required to keep hash value in 32-bit integer range,
-         * otherwise it'll be differ from C version. *)
-        loop (((hash * 32) + hash + Char.code (String.get s i)) mod 0xFFFFFFFF) (i + 1)
-    in
-    loop initial 0
-
-  (* Taken from http://www.cse.yorku.ca/~oz/hash.html. *)
-  let _djb2 (s : string) : int =
-    let hash = ref 5381 in
-    for i = 0 to String.length s - 1 do
-      hash := (!hash * 32 + !hash + Char.code (String.get s i)) mod 0xFFFFFFFF
-    done;
-    !hash
-end
-
 (* Why is this not in Stdlib? *)
 type ('a, 'b) hashtbl = ('a, 'b) Hashtbl.t
 
@@ -229,18 +196,18 @@ module Eval = struct
 
   type sexp_object =
     | Object of Ast.sexp
-    | Procedure of int option * Ast.sexp
+    | Procedure of string option * Ast.sexp
 
   let print_sexp_object (s : sexp_object) : unit =
     match s with
     | Object s -> Ast._print_ast s
     | _ -> print_string "#<procedure #f>"
 
-  type _scope = (int, sexp_object) hashtbl
+  type _scope = (string, sexp_object) hashtbl
   (* scope of current scope and (optional) outer scope *)
   and scope = _scope * _scope option
 
-  let find_in_scope (a : int) (scope : scope) : (sexp_object, string) result =
+  let find_in_scope (a : string) (scope : scope) : (sexp_object, string) result =
     let try_once (s : _scope) : (sexp_object, string) result =
       try
         Ok (Hashtbl.find s a)
@@ -255,7 +222,7 @@ module Eval = struct
        | Some s -> try_once s
        | None -> Error "Binding not found in the scope."
 
-  let add_to_scope (key : int) (value : sexp_object) (scope : scope) : unit =
+  let add_to_scope (key : string) (value : sexp_object) (scope : scope) : unit =
     let (inner, _) = scope in
     Hashtbl.add inner key value
 
@@ -267,7 +234,7 @@ module Eval = struct
     match expr with
     | Ast.Atom a ->
        (match a with
-        | Ast.Literal s -> find_in_scope (Hash.djb2 s) scope
+        | Ast.Literal s -> find_in_scope s scope
         | _ -> Ok (Object expr)
        )
     | Ast.Cons (a, a') ->
@@ -303,7 +270,7 @@ module Eval = struct
                                    (match eval_in_scope d'' scope with
                                     | Error e -> Error e
                                     | Ok s ->
-                                       add_to_scope (Hash.djb2 e') s scope;
+                                       add_to_scope e' s scope;
                                        Ok (Object d)
                                    )
                                )
@@ -329,7 +296,7 @@ module Eval = struct
                        )
                    )
                 | _ ->
-                   (match find_in_scope (Hash.djb2 c) scope with
+                   (match find_in_scope c scope with
                     | Error e -> Error e
                     | Ok c' ->
                        (match c' with
