@@ -204,27 +204,45 @@ module Eval = struct
     | _ -> print_string "#<procedure #f>"
 
   type _scope = (string, sexp_object) hashtbl
-  (* scope of current scope and (optional) outer scope *)
-  and scope = _scope * _scope option
+  and scope = Global of _scope
+            | Local of _scope * scope
 
-  let find_in_scope (a : string) (scope : scope) : (sexp_object, string) result =
+  let rec find_in_scope (a : string) (scope : scope) : (sexp_object, string) result =
     let try_once (s : _scope) : (sexp_object, string) result =
       try
         Ok (Hashtbl.find s a)
       with
       | Not_found -> Error "Binding not found in the scope."
     in
-    let (inner, outer) = scope in
-    match try_once inner with
-    | Ok s -> Ok s
-    | Error _ ->
-       match outer with
-       | Some s -> try_once s
-       | None -> Error "Binding not found in the scope."
+    match scope with
+    | Global s ->
+       (match try_once s with
+        | Ok s -> Ok s
+        | Error e -> Error e
+       )
+    | Local (s, s') ->
+       (match try_once s with
+        | Ok s -> Ok s
+        | Error _ -> find_in_scope a s'
+       )
+
+    (* let (inner, outer) = scope in
+     * match try_once inner with
+     * | Ok s -> Ok s
+     * | Error _ ->
+     *    match outer with
+     *    | Some s -> try_once s
+     *    | None -> Error "Binding not found in the scope." *)
 
   let add_to_scope (key : string) (value : sexp_object) (scope : scope) : unit =
-    let (inner, _) = scope in
-    Hashtbl.add inner key value
+    Hashtbl.add
+      (match scope with
+       | Global s -> s
+       | Local (s, s') -> s
+      )
+      key value
+    (* let (inner, _) = scope in
+     * Hashtbl.add inner key value *)
 
   (* (define id (lambda (x) x)) should return id
    * id should return #<procedure id>
@@ -333,7 +351,7 @@ let main =
     | End_of_file -> exit 0
   in
   let _global_scope : Eval._scope = Hashtbl.create 64 in
-  let global_scope : Eval.scope = (_global_scope, None) in
+  let global_scope = Eval.Global _global_scope in
   while true do
     repl global_scope
   done
