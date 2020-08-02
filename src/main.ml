@@ -79,15 +79,15 @@ module Ast = struct
            | False (* #f *)
   and cons = sexp * sexp
 
-  let car (s : sexp) : (sexp, string) result =
+  let car (s : sexp) : sexp option =
     match s with
-    | Atom _ -> Error "Not a cons cell."
-    | Cons (a, _) -> Ok a
+    | Atom _ -> None
+    | Cons (a, _) -> Some a
 
-  let cdr (s : sexp) : (sexp, string) result =
+  let cdr (s : sexp) : sexp option =
     match s with
-    | Atom _ -> Error "Not a cons cell."
-    | Cons (_, b) -> Ok b
+    | Atom _ -> None
+    | Cons (_, b) -> Some b
 
   let print_atom (atom : atom) : unit =
     match atom with
@@ -226,14 +226,6 @@ module Eval = struct
         | Error _ -> find_in_scope a s'
        )
 
-    (* let (inner, outer) = scope in
-     * match try_once inner with
-     * | Ok s -> Ok s
-     * | Error _ ->
-     *    match outer with
-     *    | Some s -> try_once s
-     *    | None -> Error "Binding not found in the scope." *)
-
   let add_to_scope (key : string) (value : sexp_object) (scope : scope) : unit =
     Hashtbl.add
       (match scope with
@@ -241,8 +233,6 @@ module Eval = struct
        | Local (s, s') -> s
       )
       key value
-    (* let (inner, _) = scope in
-     * Hashtbl.add inner key value *)
 
   (* (define id (lambda (x) x)) should return id
    * id should return #<procedure id>
@@ -264,9 +254,22 @@ module Eval = struct
                (match s with
                 | Object _ -> Error "Invalid language construction, something went wrong."
                 | Procedure (arg, body) ->
-                   match arg with
-                   | None -> eval_in_scope body scope
-                   | Some arg -> Failure.not_implemented ()
+                   (match arg with
+                    | None -> eval_in_scope body scope
+                    (* TODO: Abstract whole procedure evaluation into a separate function. *)
+                    | Some arg ->
+                       (match Ast.car a' with
+                        | None -> Error "Expected cons cell."
+                        | Some b ->
+                           let local_scope = Hashtbl.create 1 in
+                           (match eval_in_scope b scope with
+                            | Error e -> Error e
+                            | Ok b ->
+                               Hashtbl.add local_scope arg b;
+                               eval_in_scope body (Local (local_scope, scope))
+                           )
+                       )
+                   )
                )
            )
         | Ast.Atom b ->
@@ -283,8 +286,8 @@ module Eval = struct
                            (match e with
                             | Ast.Literal e' ->
                                (match Ast.car d' with
-                                | Error e -> Error e
-                                | Ok d'' ->
+                                | None -> Error "Expected cons cell."
+                                | Some d'' ->
                                    (match eval_in_scope d'' scope with
                                     | Error e -> Error e
                                     | Ok s ->
@@ -305,12 +308,17 @@ module Eval = struct
                            (match e with
                             | Ast.Nil ->
                                (match Ast.car d' with
-                                | Error e -> Error e
-                                | Ok d'' -> Ok (Procedure (None, d''))
+                                | None -> Error "Expected cons cell."
+                                | Some d'' -> Ok (Procedure (None, d''))
                                )
                             | _ -> Error "Invalid expression, expected cons or nil."
                            )
-                        | Ast.Cons _ -> Failure.not_implemented ()
+                        | Ast.Cons (Ast.Atom (Ast.Literal e), Ast.Atom Ast.Nil) ->
+                           (match Ast.car d' with
+                            | None -> Error "Expected cons cell."
+                            | Some d'' -> Ok (Procedure (Some e, d''))
+                           )
+                        | Ast.Cons _ -> Error "Currently not supported."
                        )
                    )
                 | _ ->
@@ -319,8 +327,23 @@ module Eval = struct
                     | Ok c' ->
                        (match c' with
                         | Object _ -> Error "Non-procedure application."
-                        | Procedure (args, body) ->
-                           eval_in_scope body scope
+                        | Procedure (arg, body) ->
+                           (match arg with
+                            | None -> eval_in_scope body scope
+                            (* TODO: Abstract whole procedure evaluation into a separate function. *)
+                            | Some arg ->
+                               (match Ast.car a' with
+                                | None -> Error "Expected cons cell."
+                                | Some b ->
+                                   let local_scope = Hashtbl.create 1 in
+                                   (match eval_in_scope b scope with
+                                    | Error e -> Error e
+                                    | Ok b ->
+                                       Hashtbl.add local_scope arg b;
+                                       eval_in_scope body (Local (local_scope, scope))
+                                   )
+                               )
+                           )
                        )
                    )
                )
