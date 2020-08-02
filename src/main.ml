@@ -228,12 +228,12 @@ module Eval = struct
    *)
 
   type sexp_object =
-    | Simpleton of Ast.sexp
+    | Object of Ast.sexp
     | Procedure of int option * Ast.sexp
 
   let print_sexp_object (s : sexp_object) : unit =
     match s with
-    | Simpleton s -> Ast._print_ast s
+    | Object s -> Ast._print_ast s
     | _ -> print_string "#<procedure #f>"
 
   type _scope = (int, sexp_object) hashtbl
@@ -255,6 +255,10 @@ module Eval = struct
        | Some s -> try_once s
        | None -> Error "Binding not found in the scope."
 
+  let add_to_scope (key : int) (value : sexp_object) (scope : scope) : unit =
+    let (inner, _) = scope in
+    Hashtbl.add inner key value
+
   (* (define id (lambda (x) x)) should return id
    * id should return #<procedure id>
    * (lambda (x) x) should return #<procedure nil> *)
@@ -264,7 +268,7 @@ module Eval = struct
     | Ast.Atom a ->
        (match a with
         | Ast.Literal s -> find_in_scope (Hash.djb2 s) scope
-        | _ -> Ok (Simpleton expr)
+        | _ -> Ok (Object expr)
        )
     | Ast.Cons (a, a') ->
        (match a with
@@ -273,7 +277,7 @@ module Eval = struct
             | Error e -> Error e
             | Ok s ->
                (match s with
-                | Simpleton _ -> Error "Invalid language construction, something went wrong."
+                | Object _ -> Error "Invalid language construction, something went wrong."
                 | Procedure (arg, body) ->
                    match arg with
                    | None -> eval_in_scope body scope
@@ -284,7 +288,29 @@ module Eval = struct
            (match b with
             | Ast.Literal c ->
                (match c with
-                | "define" -> Failure.work_in_progress ()
+                | "define" ->
+                   (match a' with
+                    | Ast.Atom _ -> Error "Invalid expression, expected cons."
+                    | Ast.Cons (d, d') ->
+                       (match d with
+                        | Ast.Cons _ -> Failure.not_implemented ()
+                        | Ast.Atom e ->
+                           (match e with
+                            | Ast.Literal e' ->
+                               (match Ast.car d' with
+                                | Error e -> Error e
+                                | Ok d'' ->
+                                   (match eval_in_scope d'' scope with
+                                    | Error e -> Error e
+                                    | Ok s ->
+                                       add_to_scope (Hash.djb2 e') s scope;
+                                       Ok (Object d)
+                                   )
+                               )
+                            | _ -> Error "Expected literal as a binding name."
+                           )
+                       )
+                   )
                 | "lambda" ->
                    (match a' with
                     | Ast.Atom _ -> Error "Invalid expression, expected cons or nil."
@@ -307,9 +333,8 @@ module Eval = struct
                     | Error e -> Error e
                     | Ok c' ->
                        (match c' with
-                        | Simpleton _ -> Error "Non-procedure application."
+                        | Object _ -> Error "Non-procedure application."
                         | Procedure (args, body) ->
-                           Ast._print_ast body;
                            eval_in_scope body scope
                        )
                    )
@@ -340,10 +365,8 @@ let main =
     with
     | End_of_file -> exit 0
   in
-  let global_scope : Eval._scope = Hashtbl.create 64 in
-  Hashtbl.add global_scope (Hash.djb2 "name") (Eval.Simpleton (Ast.Atom (Ast.String "aodhneine")));
-  Hashtbl.add global_scope (Hash.djb2 "get_name") (Eval.Procedure (None, (Ast.Atom (Ast.String "aodhneine"))));
-  let global_scope : Eval.scope = (global_scope, None) in
+  let _global_scope : Eval._scope = Hashtbl.create 64 in
+  let global_scope : Eval.scope = (_global_scope, None) in
   while true do
     repl global_scope
   done
