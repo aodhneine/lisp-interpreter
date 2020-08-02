@@ -89,9 +89,6 @@ module Ast = struct
            | False (* #f *)
   and cons = sexp * sexp
 
-  let car ((a, b) : cons) : sexp = a
-  let cdr ((a, b) : cons) : sexp = b
-
   let print_atom (atom : atom) : unit =
     match atom with
     | String s -> print_string ("\"" ^ s ^ "\"")
@@ -184,7 +181,7 @@ module Parser = struct
 end
 
 module Hash = struct
-  (* Taken from http://www.cse.yorku.ca/~oz/hash.html. *)
+  (* Adapted from http://www.cse.yorku.ca/~oz/hash.html. *)
   let djb2 (s : string) : int =
     let initial = 5381 in
     let len = String.length s in
@@ -196,13 +193,109 @@ module Hash = struct
         loop (((hash * 32) + hash + Char.code (String.get s i)) mod 0xFFFFFFFF) (i + 1)
     in
     loop initial 0
+
+  (* Taken from http://www.cse.yorku.ca/~oz/hash.html. *)
+  let _djb2 (s : string) : int =
+    let hash = ref 5381 in
+    for i = 0 to String.length s - 1 do
+      hash := (!hash * 32 + !hash + Char.code (String.get s i)) mod 0xFFFFFFFF
+    done;
+    !hash
 end
 
-module Evaluator = struct
+(* Why is this not in Stdlib? *)
+type ('a, 'b) hashtbl = ('a, 'b) Hashtbl.t
+
+module Failure = struct
+  let not_implemented () : ('a, string) result = Error "Not implemented yet."
+  let work_in_progress () : ('a, string) result = Error "Work In Progress."
+end
+
+module Eval = struct
+  (* (lambda () "some string") should return procedure
+   * ((lambda () "ayaya")) should evaluate to "ayaya"
+   * ((lambda (name) name) "aodhneine") should evaluate to "aodhneine"
+   *)
+
+  type sexp_object =
+    | Simpleton of Ast.sexp
+    | Procedure of int option * Ast.sexp
+  
+  type _scope = (int, sexp_object) hashtbl
+  (* scope of current scope and (optional) outer scope *)
+  and scope = _scope * _scope option
+
+  let find_in_scope (a : int) (scope : scope) : (sexp_object, string) result =
+    let try_once (s : _scope) : (sexp_object, string) result =
+      try
+        Ok (Hashtbl.find s a)
+      with
+      | Not_found -> Error "Binding not found in the scope."
+    in
+    let (inner, outer) = scope in
+    match try_once inner with
+    | Ok s -> Ok s
+    | Error _ ->
+       match outer with
+       | Some s -> try_once s
+       | None -> Error "Binding not found in the scope."
+      
+  
+  (* (define id (lambda (x) x)) should return id
+   * id should return #<procedure id>
+   * (lambda (x) x) should return #<procedure nil> *)
+
+  let rec eval_in_scope (expr : Ast.sexp) (scope : scope) : (sexp_object, string) result =
+    match expr with
+    | Ast.Atom a ->
+       (match a with
+        | Ast.Literal s -> find_in_scope (Hash.djb2 s) scope
+        | _ -> Ok (Simpleton expr)
+       )
+    | Ast.Cons (a, a') ->
+       (match a with
+        | Ast.Cons _ -> eval_in_scope a scope
+        | Ast.Atom b ->
+           (match b with
+            | Ast.Literal c ->
+               (match c with
+                | "define" -> Failure.work_in_progress ()
+                | "lambda" ->
+                   (match a' with
+                    | Ast.Atom _ -> Error "Invalid expression, expected cons or nil."
+                    | Ast.Cons (d, d') ->
+                       (match d with
+                        | Ast.Atom e ->
+                           (match e with
+                            | Ast.Nil -> Failure.work_in_progress ()
+                            | _ -> Error "Invalid expression, expected cons or nil."
+                           )
+                        | Ast.Cons _ -> Failure.not_implemented () 
+                       )
+                   )
+                | _ ->
+                   (match find_in_scope (Hash.djb2 c) scope with
+                    | Error e -> Error e
+                    | Ok c' ->
+                       (match c' with
+                        | Simpleton _ -> Error "Non-procedure application."
+                        | Procedure (args, body) ->
+                           eval_in_scope body scope
+                       )
+                   )
+               )
+            | _ -> Error "Invalid expression."
+           )
+       )
+
+  let print_sexp_object (s : sexp_object) : unit =
+    match s with
+    | Simpleton s -> Ast._print_ast s
+    | _ -> print_string "not implemented."
 end
 
 let main =
-  let repl () : unit =
+  let repl (scope : Eval.scope) : unit =
     print_string "> ";
     try
       let input = read_line () in
@@ -210,12 +303,22 @@ let main =
       (match Parser.parser tokens with
        | Error e -> print_string ("!> " ^ e)
        | Ok (ast, tkns) ->
+          print_string "\x1b[2m";
           print_string "#> "; Ast._print_ast ast; print_endline ""; print_string "*> "; Token.print_token_list tkns;
+          print_endline "\x1b[0m";
+          (match Eval.eval_in_scope ast scope with
+           | Error e -> print_string ("!> " ^ e)
+           | Ok s -> Eval.print_sexp_object s
+          )
       );
       print_endline "";
     with
     | End_of_file -> exit 0
   in
+  let global_scope : Eval._scope = Hashtbl.create 64 in
+  Hashtbl.add global_scope (Hash.djb2 "name") (Eval.Simpleton (Ast.Atom (Ast.String "aodhneine")));
+  Hashtbl.add global_scope (Hash.djb2 "get_name") (Eval.Procedure (None, (Ast.Atom (Ast.String "aodhneine"))));
+  let global_scope : Eval.scope = (global_scope, None) in
   while true do
-    repl ()
+    repl global_scope
   done
