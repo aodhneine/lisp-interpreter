@@ -146,7 +146,7 @@ module Parser = struct
     | Quote ->
        (match parser (List.tl input) with
         | Error e -> Error e
-        | Ok (a', b) -> Ok ((Ast.Cons (Ast.Atom (Ast.Literal "quote"), a')), b)
+        | Ok (a', b) -> Ok ((Ast.Cons (Ast.Atom (Ast.Literal "quote"), Ast.Cons (a', Ast.Atom Ast.Nil))), b)
        )
     | OpenBracket ->
        let a = List.tl input in
@@ -210,20 +210,24 @@ module Eval = struct
   (* inner scope, (optional) outer scope *)
   and scope = Scope of _scope * scope option
 
-  let rec print_scope (s : scope) : unit =
-    match s with
-    | Scope (s, None) ->
+  let rec print_scope (scope : scope) : unit =
+    let Scope (s, s') = scope in
+    match s' with
+    | None ->
        print_string "(scope/global) ";
-       Hashtbl.iter (fun x y -> print_string x; print_string " -> "; print_sexp_object y; print_string " ") s;
+       Hashtbl.iter (fun x y -> print_string x; print_string " -> "; print_sexp_object y; print_string "; ") s;
        print_endline "";
-    | Scope (s, Some s') ->
+    | Some s'' ->
        print_string "(scope/local) ";
-       Hashtbl.iter (fun x y -> print_string x; print_string " -> "; print_sexp_object y; print_string " ") s;
+       Hashtbl.iter (fun x y -> print_string x; print_string " -> "; print_sexp_object y; print_string "; ") s;
        print_endline "";
-       print_scope s'
+       print_scope s''
 
   let rec find_in_scope (a : string) (scope : scope) : (sexp_object, string) result =
     let try_once (s : _scope) : (sexp_object, string) result =
+      print_string "(searching scope) ";
+      Hashtbl.iter (fun x y -> print_string x; print_string " -> "; print_sexp_object y; print_string "; ") s;
+      print_endline "";
       try
         Ok (Hashtbl.find s a)
       with
@@ -304,8 +308,13 @@ module Eval = struct
              | Ok arg' ->
                 let local_scope = Hashtbl.create 1 in
                 Hashtbl.add local_scope arg_name arg';
-                let scope = Scope (local_scope, Some scope) in
-                eval_in_scope body scope
+                print_string "(constructed scope) ";
+                Hashtbl.iter (fun x y -> print_string x; print_string " -> "; print_sexp_object y; print_string " ") local_scope;
+                print_endline "";
+                print_scope scope;
+                let scope' = Scope (local_scope, Some scope) in
+                print_scope scope';
+                eval_in_scope body scope'
             )
         )
     )
