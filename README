@@ -5,7 +5,7 @@ and `ocamlopt.opt`.
 
 ## License
 
-`lisp-interpreter` is released into a public domain. For more information refer
-to the [COPYING] file.
+`lisp-interpreter` is free and unencumbered software released into the public
+domain. For more information refer to the [COPYING] file.
 
 [COPYING]:  ./COPYING

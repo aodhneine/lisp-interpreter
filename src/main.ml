@@ -201,19 +201,23 @@ module Eval = struct
   let print_sexp_object (s : sexp_object) : unit =
     match s with
     | Object s -> Ast._print_ast s
-    | _ -> print_string ("#<procedure nil>")
+    | Procedure (arg, body) ->
+       print_string ("#<procedure nil>");
+       print_string (" (" ^ (Option.value arg ~default:"None") ^ ", ");
+       Ast._print_ast body; print_string ")"
 
   type _scope = (string, sexp_object) hashtbl
-  and scope = Global of _scope
-            (* inner, outer scope *)
-            | Local of _scope * scope
+  (* inner scope, (optional) outer scope *)
+  and scope = Scope of _scope * scope option
 
   let rec print_scope (s : scope) : unit =
     match s with
-    | Global s ->
+    | Scope (s, None) ->
+       print_string "(scope/global) ";
        Hashtbl.iter (fun x y -> print_string x; print_string " -> "; print_sexp_object y; print_string " ") s;
        print_endline "";
-    | Local (s, s') ->
+    | Scope (s, Some s') ->
+       print_string "(scope/local) ";
        Hashtbl.iter (fun x y -> print_string x; print_string " -> "; print_sexp_object y; print_string " ") s;
        print_endline "";
        print_scope s'
@@ -223,25 +227,19 @@ module Eval = struct
       try
         Ok (Hashtbl.find s a)
       with
-      | Not_found -> Error ("Binding " ^ a  ^ " not found in the scope.")
+      | Not_found -> Error ("Binding " ^ a ^ " not found in the scope.")
     in
     match scope with
-    | Global s ->
-       (match try_once s with
-        | Ok s -> Ok s
-        | Error e -> Error e
-       )
-    | Local (s, s') ->
-       (match try_once s with
-        | Ok s -> Ok s
-        | Error _ -> find_in_scope a s'
-       )
+    | Scope (s, None) -> try_once s
+    | Scope (s, Some s') ->
+       match try_once s with
+       | Ok s -> Ok s
+       | Error _ -> find_in_scope a s'
 
   let add_to_scope (key : string) (value : sexp_object) (scope : scope) : unit =
     Hashtbl.add
       (match scope with
-       | Global s -> s
-       | Local (s, _) -> s
+       | Scope (s, _) -> s
       )
       key value
 
@@ -306,7 +304,8 @@ module Eval = struct
              | Ok arg' ->
                 let local_scope = Hashtbl.create 1 in
                 Hashtbl.add local_scope arg_name arg';
-                eval_in_scope body (Local (local_scope, scope))
+                let scope = Scope (local_scope, Some scope) in
+                eval_in_scope body scope
             )
         )
     )
@@ -379,7 +378,7 @@ let main =
     | End_of_file -> exit 0
   in
   let _global_scope : Eval._scope = Hashtbl.create 64 in
-  let global_scope = Eval.Global _global_scope in
+  let global_scope = Eval.Scope (_global_scope, None) in
   while true do
     repl global_scope
   done
