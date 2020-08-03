@@ -201,18 +201,29 @@ module Eval = struct
   let print_sexp_object (s : sexp_object) : unit =
     match s with
     | Object s -> Ast._print_ast s
-    | _ -> print_string "#<procedure #f>"
+    | _ -> print_string ("#<procedure nil>")
 
   type _scope = (string, sexp_object) hashtbl
   and scope = Global of _scope
+            (* inner, outer scope *)
             | Local of _scope * scope
+
+  let rec print_scope (s : scope) : unit =
+    match s with
+    | Global s ->
+       Hashtbl.iter (fun x y -> print_string x; print_string " -> "; print_sexp_object y; print_string " ") s;
+       print_endline "";
+    | Local (s, s') ->
+       Hashtbl.iter (fun x y -> print_string x; print_string " -> "; print_sexp_object y; print_string " ") s;
+       print_endline "";
+       print_scope s'
 
   let rec find_in_scope (a : string) (scope : scope) : (sexp_object, string) result =
     let try_once (s : _scope) : (sexp_object, string) result =
       try
         Ok (Hashtbl.find s a)
       with
-      | Not_found -> Error "Binding not found in the scope."
+      | Not_found -> Error ("Binding " ^ a  ^ " not found in the scope.")
     in
     match scope with
     | Global s ->
@@ -230,7 +241,7 @@ module Eval = struct
     Hashtbl.add
       (match scope with
        | Global s -> s
-       | Local (s, s') -> s
+       | Local (s, _) -> s
       )
       key value
 
@@ -240,116 +251,110 @@ module Eval = struct
 
   let rec eval_in_scope (expr : Ast.sexp) (scope : scope) : (sexp_object, string) result =
     match expr with
+    (* if it's a literal, we just return it *)
     | Ast.Atom a ->
        (match a with
+        (* if it's a literal, try to find an associated value with it *)
         | Ast.Literal s -> find_in_scope s scope
+        (* otherwise, just return it as-is *)
         | _ -> Ok (Object expr)
        )
-    | Ast.Cons (a, a') ->
-       (match a with
-        | Ast.Cons _ ->
-           (match eval_in_scope a scope with
-            | Error e -> Error e
-            | Ok s ->
-               (match s with
-                | Object _ -> Error "Invalid language construction, something went wrong."
-                | Procedure (arg, body) ->
-                   (match arg with
-                    | None -> eval_in_scope body scope
-                    (* TODO: Abstract whole procedure evaluation into a separate function. *)
-                    | Some arg ->
-                       (match Ast.car a' with
-                        | None -> Error "Expected cons cell."
-                        | Some b ->
-                           let local_scope = Hashtbl.create 1 in
-                           (match eval_in_scope b scope with
-                            | Error e -> Error e
-                            | Ok b ->
-                               Hashtbl.add local_scope arg b;
-                               eval_in_scope body (Local (local_scope, scope))
-                           )
-                       )
-                   )
-               )
-           )
+    (* if it's a cons, then it must be a function call *)
+    | Ast.Cons (head, tail) ->
+       (match head with
+        (* if it's an atom, we have to check what kind of atom is it *)
         | Ast.Atom b ->
            (match b with
             | Ast.Literal c ->
                (match c with
-                | "define" ->
-                   (match a' with
-                    | Ast.Atom _ -> Error "Invalid expression, expected cons."
-                    | Ast.Cons (d, d') ->
-                       (match d with
-                        | Ast.Cons _ -> Failure.not_implemented ()
-                        | Ast.Atom e ->
-                           (match e with
-                            | Ast.Literal e' ->
-                               (match Ast.car d' with
-                                | None -> Error "Expected cons cell."
-                                | Some d'' ->
-                                   (match eval_in_scope d'' scope with
-                                    | Error e -> Error e
-                                    | Ok s ->
-                                       add_to_scope e' s scope;
-                                       Ok (Object d)
-                                   )
-                               )
-                            | _ -> Error "Expected literal as a binding name."
-                           )
-                       )
-                   )
-                | "lambda" ->
-                   (match a' with
-                    | Ast.Atom _ -> Error "Invalid expression, expected cons or nil."
-                    | Ast.Cons (d, d') ->
-                       (match d with
-                        | Ast.Atom e ->
-                           (match e with
-                            | Ast.Nil ->
-                               (match Ast.car d' with
-                                | None -> Error "Expected cons cell."
-                                | Some d'' -> Ok (Procedure (None, d''))
-                               )
-                            | _ -> Error "Invalid expression, expected cons or nil."
-                           )
-                        | Ast.Cons (Ast.Atom (Ast.Literal e), Ast.Atom Ast.Nil) ->
-                           (match Ast.car d' with
-                            | None -> Error "Expected cons cell."
-                            | Some d'' -> Ok (Procedure (Some e, d''))
-                           )
-                        | Ast.Cons _ -> Error "Currently not supported."
-                       )
-                   )
+                | "define" -> eval_define_body_in_scope tail scope
+                | "lambda" -> eval_lambda_body_in_scope tail scope
                 | _ ->
+                   (* first we try to find identifier in the current scope *)
                    (match find_in_scope c scope with
                     | Error e -> Error e
                     | Ok c' ->
                        (match c' with
+                        (* if it's object, it's invalid *)
                         | Object _ -> Error "Non-procedure application."
-                        | Procedure (arg, body) ->
-                           (match arg with
-                            | None -> eval_in_scope body scope
-                            (* TODO: Abstract whole procedure evaluation into a separate function. *)
-                            | Some arg ->
-                               (match Ast.car a' with
-                                | None -> Error "Expected cons cell."
-                                | Some b ->
-                                   let local_scope = Hashtbl.create 1 in
-                                   (match eval_in_scope b scope with
-                                    | Error e -> Error e
-                                    | Ok b ->
-                                       Hashtbl.add local_scope arg b;
-                                       eval_in_scope body (Local (local_scope, scope))
-                                   )
-                               )
-                           )
+                        | Procedure (arg, body) -> eval_procedure_application_in_scope (arg, body) tail scope
                        )
                    )
                )
             | _ -> Error "Invalid expression."
            )
+        (* if a is cons, then we need to evaluate it first *)
+        | Ast.Cons _ ->
+           (match eval_in_scope head scope with
+            | Error e -> Error e
+            | Ok s ->
+               (match s with
+                | Object _ -> Error "Invalid language construction, something went wrong."
+                | Procedure (arg, body) -> eval_procedure_application_in_scope (arg, body) tail scope
+               )
+           )
        )
+  and eval_procedure_application_in_scope ((arg, body) : (string option * Ast.sexp)) (tail : Ast.sexp) (scope : scope) : (sexp_object, string) result =
+    (match arg with
+     | None -> eval_in_scope body scope
+     | Some arg_name ->
+        (match Ast.car tail with
+         | None -> Error "Expected cons cell."
+         | Some arg ->
+            (match eval_in_scope arg scope with
+             | Error e -> Error e
+             | Ok arg' ->
+                let local_scope = Hashtbl.create 1 in
+                Hashtbl.add local_scope arg_name arg';
+                eval_in_scope body (Local (local_scope, scope))
+            )
+        )
+    )
+  and eval_define_body_in_scope (expr : Ast.sexp) (scope : scope) : (sexp_object, string) result =
+    (match expr with
+     | Ast.Atom _ -> Error "Invalid expression, expected cons."
+     | Ast.Cons (d, d') ->
+        (match d with
+         | Ast.Cons _ -> Failure.not_implemented ()
+         | Ast.Atom e ->
+            (match e with
+             | Ast.Literal e' ->
+                (match Ast.car d' with
+                 | None -> Error "Expected cons cell."
+                 | Some d'' ->
+                    (match eval_in_scope d'' scope with
+                     | Error e -> Error e
+                     | Ok s ->
+                        add_to_scope e' s scope;
+                        Ok (Object d)
+                    )
+                )
+             | _ -> Error "Expected literal as a binding name."
+            )
+        )
+    )
+  and eval_lambda_body_in_scope (expr : Ast.sexp) (scope : scope) : (sexp_object, string) result =
+    (match expr with
+     | Ast.Atom _ -> Error "Invalid expression, expected cons or nil."
+     | Ast.Cons (d, d') ->
+        (match d with
+         | Ast.Atom e ->
+            (match e with
+             | Ast.Nil ->
+                (match Ast.car d' with
+                 | None -> Error "Expected cons cell."
+                 | Some d'' -> Ok (Procedure (None, d''))
+                )
+             | _ -> Error "Invalid expression, expected cons or nil."
+            )
+         | Ast.Cons (Ast.Atom (Ast.Literal e), Ast.Atom Ast.Nil) ->
+            (match Ast.car d' with
+             | None -> Error "Expected cons cell."
+             | Some d'' -> Ok (Procedure (Some e, d''))
+            )
+         | Ast.Cons _ -> Error "Currently not supported."
+        )
+    )
 end
 
 let main =
