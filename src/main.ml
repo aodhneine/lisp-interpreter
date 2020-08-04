@@ -203,31 +203,22 @@ module Eval = struct
     | Object s -> Ast._print_ast s
     | Procedure (arg, body) ->
        print_string ("#<procedure nil>");
-       print_string (" (" ^ (Option.value arg ~default:"None") ^ ", ");
-       Ast._print_ast body; print_string ")"
 
   type _scope = (string, sexp_object) hashtbl
   (* inner scope, (optional) outer scope *)
   and scope = Scope of _scope * scope option
 
   let rec print_scope (scope : scope) : unit =
-    let Scope (s, s') = scope in
-    match s' with
-    | None ->
-       print_string "(scope/global) ";
-       Hashtbl.iter (fun x y -> print_string x; print_string " -> "; print_sexp_object y; print_string "; ") s;
+    match scope with
+    | Scope (s, None) ->
+       Hashtbl.iter (fun x y -> print_string x; print_string " : "; print_sexp_object y; print_string "; ") s;
        print_endline "";
-    | Some s'' ->
-       print_string "(scope/local) ";
-       Hashtbl.iter (fun x y -> print_string x; print_string " -> "; print_sexp_object y; print_string "; ") s;
-       print_endline "";
-       print_scope s''
+    | Scope (s, Some s') ->
+       Hashtbl.iter (fun x y -> print_string x; print_string " : "; print_sexp_object y; print_string "; ") s;
+       print_scope s'
 
   let rec find_in_scope (a : string) (scope : scope) : (sexp_object, string) result =
     let try_once (s : _scope) : (sexp_object, string) result =
-      print_string "(searching scope) ";
-      Hashtbl.iter (fun x y -> print_string x; print_string " -> "; print_sexp_object y; print_string "; ") s;
-      print_endline "";
       try
         Ok (Hashtbl.find s a)
       with
@@ -308,14 +299,9 @@ module Eval = struct
              | Ok arg' ->
                 let local_scope = Hashtbl.create 1 in
                 Hashtbl.add local_scope arg_name arg';
-                print_string "(constructed scope) ";
-                Hashtbl.iter (fun x y -> print_string x; print_string " -> "; print_sexp_object y; print_string " ") local_scope;
-                print_endline "";
-                print_scope scope;
                 let scope' = Scope (local_scope, Some scope) in
-                print_scope scope';
                 eval_in_scope body scope'
-            )
+             )
         )
     )
   and eval_define_body_in_scope (expr : Ast.sexp) (scope : scope) : (sexp_object, string) result =
@@ -370,24 +356,30 @@ let main =
     print_string "> ";
     try
       let input = read_line () in
-      let tokens = Lexer.lexer input in
-      (match Parser.parser tokens with
-       | Error e -> print_string ("!> " ^ e)
-       | Ok (ast, tkns) ->
-          print_string "\x1b[2m";
-          print_string "#> "; Ast._print_ast ast; print_endline ""; print_string "*> "; Token.print_token_list tkns;
-          print_endline "\x1b[0m";
-          (match Eval.eval_in_scope ast scope with
-           | Error e -> print_string ("!> " ^ e)
-           | Ok s -> Eval.print_sexp_object s
-          )
-      );
-      print_endline "";
+      (* TODO: This has no bound checking or anything. *)
+      if String.get input 0 == ',' then
+        match String.sub input 1 (String.length input - 1) with
+        | "quit" -> exit 0
+        | "scope" -> Eval.print_scope scope
+        | _ -> ()
+      else
+        let tokens = Lexer.lexer input in
+        (match Parser.parser tokens with
+         | Error e -> print_string ("!> " ^ e)
+         | Ok (ast, tkns) ->
+            print_string "\x1b[2m";
+            print_string "#> "; Ast._print_ast ast; print_endline ""; print_string "*> "; Token.print_token_list tkns;
+            print_endline "\x1b[0m";
+            (match Eval.eval_in_scope ast scope with
+             | Error e -> print_string ("!> " ^ e)
+             | Ok s -> Eval.print_sexp_object s
+            )
+        );
+        print_endline "";
     with
     | End_of_file -> exit 0
   in
-  let _global_scope : Eval._scope = Hashtbl.create 64 in
-  let global_scope = Eval.Scope (_global_scope, None) in
+  let global_scope = Eval.Scope (Hashtbl.create 64, None) in
   while true do
     repl global_scope
   done
