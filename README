@@ -3,9 +3,16 @@
 This is an intepreter for a minimal subset of lisp. To build it you need `make`
 and `ocamlopt.opt`.
 
+## Development
+
+Issues should be submitted to the project issue tracker[1]. For discussion and
+to submit patches, visit development mailing list[2].
+
 ## License
 
 `lisp-interpreter` is free and unencumbered software released into the public
 domain. For more information refer to the [COPYING] file.
 
+[1]: https://todo.sr.ht/~aodhnait/lisp-interpreter
+[2]: https://lists.sr.ht/~aodhnait/lisp-interpreter-dev
 [COPYING]:  ./COPYING
