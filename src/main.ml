@@ -204,151 +204,149 @@ module Eval = struct
     | Procedure (arg, body) ->
        print_string ("#<procedure nil>");
 
-  type _scope = (string, sexp_object) hashtbl
-  (* inner scope, (optional) outer scope *)
-  and scope = Scope of _scope * scope option
+  module Scope = struct
+    type _scope = (string, sexp_object) hashtbl
+    (* inner scope, (optional) outer scope *)
+    and t = Scope of _scope * t option
 
-  let rec print_scope (scope : scope) : unit =
-    match scope with
-    | Scope (s, None) ->
-       Hashtbl.iter (fun x y -> print_string x; print_string " : "; print_sexp_object y; print_string "; ") s;
-       print_endline "";
-    | Scope (s, Some s') ->
-       Hashtbl.iter (fun x y -> print_string x; print_string " : "; print_sexp_object y; print_string "; ") s;
-       print_scope s'
+    let rec print (scope : t) : unit =
+      match scope with
+      | Scope (s, None) ->
+         Hashtbl.iter (fun x y -> print_string x; print_string " : "; print_sexp_object y; print_string "; ") s;
+         print_endline "";
+      | Scope (s, Some s') ->
+         Hashtbl.iter (fun x y -> print_string x; print_string " : "; print_sexp_object y; print_string "; ") s;
+         print s'
 
-  let rec find_in_scope (a : string) (scope : scope) : (sexp_object, string) result =
-    let try_once (s : _scope) : (sexp_object, string) result =
-      try
-        Ok (Hashtbl.find s a)
-      with
-      | Not_found -> Error ("Binding " ^ a ^ " not found in the scope.")
-    in
-    match scope with
-    | Scope (s, None) -> try_once s
-    | Scope (s, Some s') ->
-       match try_once s with
-       | Ok s -> Ok s
-       | Error _ -> find_in_scope a s'
+    let rec find (key : string) (scope : t) : (sexp_object, string) result =
+      let try_once (s : _scope) : (sexp_object, string) result =
+        try
+          Ok (Hashtbl.find s key)
+        with
+        | Not_found -> Error ("Binding " ^ key ^ " not found in the scope.")
+      in
+      match scope with
+      | Scope (s, None) -> try_once s
+      | Scope (s, Some s') ->
+         match try_once s with
+         | Ok s -> Ok s
+         | Error _ -> find key s'
 
-  let add_to_scope (key : string) (value : sexp_object) (scope : scope) : unit =
-    Hashtbl.add
-      (match scope with
-       | Scope (s, _) -> s
-      )
-      key value
+    let add (key : string) (value : sexp_object) (scope : t) : unit =
+      Hashtbl.add
+        (match scope with
+         | Scope (s, _) -> s
+        )
+        key value
+  end
+
+  type scope = Scope.t
 
   (* (define id (lambda (x) x)) should return id
    * id should return #<procedure id>
    * (lambda (x) x) should return #<procedure nil> *)
 
-  let rec eval_in_scope (expr : Ast.sexp) (scope : scope) : (sexp_object, string) result =
+  let rec eval_in_scope (expr : Ast.sexp) (scope : scope) : ((sexp_object * scope), string) result =
     match expr with
-    (* if it's a literal, we just return it *)
-    | Ast.Atom a ->
-       (match a with
-        (* if it's a literal, try to find an associated value with it *)
-        | Ast.Literal s -> find_in_scope s scope
-        (* otherwise, just return it as-is *)
-        | _ -> Ok (Object expr)
-       )
-    (* if it's a cons, then it must be a function call *)
+    | Ast.Atom atom -> eval_atom_in_scope atom scope
     | Ast.Cons (head, tail) ->
-       (match head with
-        (* if it's an atom, we have to check what kind of atom is it *)
-        | Ast.Atom b ->
-           (match b with
-            | Ast.Literal c ->
-               (match c with
-                | "define" -> eval_define_body_in_scope tail scope
-                | "lambda" -> eval_lambda_body_in_scope tail scope
-                | _ ->
-                   (* first we try to find identifier in the current scope *)
-                   (match find_in_scope c scope with
-                    | Error e -> Error e
-                    | Ok c' ->
-                       (match c' with
-                        (* if it's object, it's invalid *)
-                        | Object _ -> Error "Non-procedure application."
-                        | Procedure (arg, body) -> eval_procedure_application_in_scope (arg, body) tail scope
-                       )
-                   )
+       match head with
+       | Ast.Atom (Ast.Literal s) ->
+          (match s with
+           | "define" -> eval_define_body_in_scope tail scope
+           | "quote" ->
+              (match Ast.car tail with
+               | Some body -> Ok ((Object body), scope)
+               | None -> Error "Invalid language construction, expected cons."
+              )
+           | "lambda" -> eval_lambda_body_in_scope tail scope
+           | _ ->
+              (match Scope.find s scope with
+               | Ok obj ->
+                  (match obj with
+                   | Procedure (args, body) -> eval_procedure_application_in_scope (args, body) tail scope
+                   | Object _ -> Error "Non-procedure application."
+                  )
+               | Error e -> Error e
+              )
+          )
+       | Ast.Cons _ ->
+          (match eval_in_scope head scope with
+           | Ok (obj, scope) ->
+              (match obj with
+               | Procedure (args, body) ->
+                  eval_procedure_application_in_scope (args, body) tail scope
+               | Object _ -> Error "Non-procedure application."
+              )
+           | Error e -> Error e
+          )
+       | Ast.Atom _ -> Error "Invalid language construction, expected literal or cons."
+  and eval_atom_in_scope (atom : Ast.atom) (scope : scope) : ((sexp_object * scope), string) result =
+    match atom with
+    | Ast.Literal s ->
+       (match Scope.find s scope with
+        | Ok obj -> Ok (obj, scope)
+        | Error e -> Error e
+       )
+    | _ -> Ok ((Object (Ast.Atom atom)), scope)
+  and eval_define_body_in_scope (body : Ast.sexp) (scope : scope) : ((sexp_object * scope), string) result =
+    match body with
+    | Ast.Cons (name, body) ->
+       (match name with
+        | Ast.Atom (Ast.Literal s) ->
+           (match Ast.car body with
+            | Some body' ->
+               (match eval_in_scope body' scope with
+                | Ok (evaluated_form, _) ->
+                   Scope.add s evaluated_form scope;
+                   Ok ((Object name), scope)
+                | Error e -> Error e
                )
-            | _ -> Error "Invalid expression."
+            | None -> Error "Invalid language construction, expected cons."
            )
-        (* if a is cons, then we need to evaluate it first *)
-        | Ast.Cons _ ->
-           (match eval_in_scope head scope with
-            | Error e -> Error e
-            | Ok s ->
-               (match s with
-                | Object _ -> Error "Invalid language construction, something went wrong."
-                | Procedure (arg, body) -> eval_procedure_application_in_scope (arg, body) tail scope
-               )
+        | _ -> Error "Invalid language construction, expected literal."
+       )
+    | Ast.Atom _ -> Error "Invalid language construction, expected cons."
+  and eval_lambda_body_in_scope (body : Ast.sexp) (scope : scope) : ((sexp_object * scope), string) result =
+    match body with
+    | Ast.Cons (args, body) ->
+       (match
+          (match args with
+           | Ast.Atom Ast.Nil -> Ok None
+           | Ast.Cons (a, rest) ->
+              (match rest with
+               | Ast.Atom Ast.Nil ->
+                  (match a with
+                   | Ast.Atom (Ast.Literal s) -> Ok (Some s)
+                   | _ -> Error "Invalid language construction, expected literal."
+                  )
+               | _ -> Failure.not_implemented ()
+              )
+           | _ -> Error "Invalid language construction, expected cons or nil."
+          )
+        with
+        | Error e -> Error e
+        | Ok args ->
+           (match Ast.car body with
+            | Some body -> Ok ((Procedure (args, body)), scope)
+            | None -> Error "Invalid language construction, expected cons."
            )
        )
-  and eval_procedure_application_in_scope ((arg, body) : (string option * Ast.sexp)) (tail : Ast.sexp) (scope : scope) : (sexp_object, string) result =
-    (match arg with
-     | None -> eval_in_scope body scope
-     | Some arg_name ->
-        (match Ast.car tail with
-         | None -> Error "Expected cons cell."
-         | Some arg ->
-            (match eval_in_scope arg scope with
-             | Error e -> Error e
-             | Ok arg' ->
-                let local_scope = Hashtbl.create 1 in
-                Hashtbl.add local_scope arg_name arg';
-                let scope' = Scope (local_scope, Some scope) in
-                eval_in_scope body scope'
-             )
-        )
-    )
-  and eval_define_body_in_scope (expr : Ast.sexp) (scope : scope) : (sexp_object, string) result =
-    (match expr with
-     | Ast.Atom _ -> Error "Invalid expression, expected cons."
-     | Ast.Cons (d, d') ->
-        (match d with
-         | Ast.Cons _ -> Failure.not_implemented ()
-         | Ast.Atom e ->
-            (match e with
-             | Ast.Literal e' ->
-                (match Ast.car d' with
-                 | None -> Error "Expected cons cell."
-                 | Some d'' ->
-                    (match eval_in_scope d'' scope with
-                     | Error e -> Error e
-                     | Ok s ->
-                        add_to_scope e' s scope;
-                        Ok (Object d)
-                    )
-                )
-             | _ -> Error "Expected literal as a binding name."
-            )
-        )
-    )
-  and eval_lambda_body_in_scope (expr : Ast.sexp) (scope : scope) : (sexp_object, string) result =
-    (match expr with
-     | Ast.Atom _ -> Error "Invalid expression, expected cons or nil."
-     | Ast.Cons (d, d') ->
-        (match d with
-         | Ast.Atom e ->
-            (match e with
-             | Ast.Nil ->
-                (match Ast.car d' with
-                 | None -> Error "Expected cons cell."
-                 | Some d'' -> Ok (Procedure (None, d''))
-                )
-             | _ -> Error "Invalid expression, expected cons or nil."
-            )
-         | Ast.Cons (Ast.Atom (Ast.Literal e), Ast.Atom Ast.Nil) ->
-            (match Ast.car d' with
-             | None -> Error "Expected cons cell."
-             | Some d'' -> Ok (Procedure (Some e, d''))
-            )
-         | Ast.Cons _ -> Error "Currently not supported."
-        )
-    )
+    | Ast.Atom _ -> Error "Invalid language construction, expected cons."
+  and eval_procedure_application_in_scope ((args, body) : string option * Ast.sexp) (tail : Ast.sexp) (scope : scope) : ((sexp_object * scope), string) result =
+    match args with
+    | None -> eval_in_scope body scope
+    | Some arg_name ->
+       match Ast.car tail with
+       | Some arg ->
+          (match eval_in_scope arg scope with
+           | Ok (arg', scope) ->
+              let _inner_scope : Scope._scope = Hashtbl.create 1 in
+              Hashtbl.add _inner_scope arg_name arg';
+              eval_in_scope body (Scope.Scope (_inner_scope, Some scope))
+           | Error e -> Error e
+          )
+       | None -> Error "Invalid language construction, expected cons."
 end
 
 let main =
@@ -360,7 +358,7 @@ let main =
       if String.get input 0 == ',' then
         match String.sub input 1 (String.length input - 1) with
         | "quit" -> exit 0
-        | "scope" -> Eval.print_scope scope
+        | "scope" -> Eval.Scope.print scope
         | _ -> ()
       else
         let tokens = Lexer.lexer input in
@@ -372,14 +370,14 @@ let main =
             print_endline "\x1b[0m";
             (match Eval.eval_in_scope ast scope with
              | Error e -> print_string ("!> " ^ e)
-             | Ok s -> Eval.print_sexp_object s
+             | Ok (s, _) -> Eval.print_sexp_object s
             )
         );
         print_endline "";
     with
     | End_of_file -> exit 0
   in
-  let global_scope = Eval.Scope (Hashtbl.create 64, None) in
+  let global_scope = Eval.Scope.Scope (Hashtbl.create 64, None) in
   while true do
     repl global_scope
   done
