@@ -4,7 +4,7 @@ OCAMLC = ocamlopt.opt
 all: main
 
 main.cmx: main.ml
-	$(OCAMLC) -c $<
+	$(OCAMLC) -c main.ml
 
 main: main.cmx
-	$(OCAMLC) $^ -o $@
+	$(OCAMLC) main.cmx -o main
